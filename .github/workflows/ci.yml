@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  # A PR green on a stale base can still break main, so the merge result is checked too.
+  # These runs also save the Rust cache: a PR restores the caches of its base branch.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Runs on main aren't cancelled: a cancelled run saves no cache.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+# The ruleset on main requires these checks by their names.
+jobs:
+  fmt:
+    name: "cargo fmt"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      # No step pushes, so the token isn't left in .git/config.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Unstable rustfmt options in rustfmt.toml; stable ignores them silently.
+      # A third-party action, so it is pinned to a commit, here and below.
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: nightly
+          components: rustfmt
+          cache: false
+
+      - run: cargo fmt --check
+
+  check:
+    name: "cargo clippy, test"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: stable
+          components: clippy
+          # Only main saves the cache: a PR's cache is visible to that PR alone,
+          # and a copy per PR fills the repository's cache limit.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # --locked throughout: Cargo.lock is committed, and without it a stale lock
+      # resolves afresh here and passes, then fails wherever it is enforced.
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+      - run: cargo test --locked
