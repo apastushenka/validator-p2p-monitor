@@ -15,19 +15,35 @@ pub struct Validator {
     pub authority_discovery_key: [u8; 32],
 }
 
-pub async fn current_validators(rpc: &str) -> anyhow::Result<Vec<Validator>> {
-    let client = OnlineClient::<SubstrateConfig>::from_url(rpc)
-        .await
-        .context("failed to connect to the RPC endpoint")?;
-    let at = client
-        .at_current_block()
-        .await
-        .context("failed to get the latest finalized block")?;
+pub struct Chain {
+    client: OnlineClient<SubstrateConfig>,
+}
 
-    let accounts = fetch(&at, session::validators()).await?;
-    let keys = fetch(&at, authority_discovery::keys()).await?;
+impl Chain {
+    pub async fn connect(rpc: &str) -> anyhow::Result<Self> {
+        let client = OnlineClient::from_url(rpc)
+            .await
+            .context("failed to connect to the RPC endpoint")?;
 
-    pair(accounts, keys)
+        Ok(Self { client })
+    }
+
+    pub fn genesis_hash(&self) -> [u8; 32] {
+        self.client.genesis_hash().0
+    }
+
+    pub async fn current_validators(&self) -> anyhow::Result<Vec<Validator>> {
+        let at = self
+            .client
+            .at_current_block()
+            .await
+            .context("failed to get the latest finalized block")?;
+
+        let accounts = fetch(&at, session::validators()).await?;
+        let keys = fetch(&at, authority_discovery::keys()).await?;
+
+        pair(accounts, keys)
+    }
 }
 
 /// Match the accounts from `Session::Validators` with the keys from `AuthorityDiscovery::Keys`.
