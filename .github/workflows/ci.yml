@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
-# The ruleset on main requires these checks by their names.
+# The ruleset on main requires these checks by their names, all but "cargo deny advisories".
 jobs:
   fmt:
     name: "cargo fmt"
@@ -65,3 +65,35 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
 
       - run: cargo test --locked
+
+  deny:
+    name: "cargo deny"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          # Replaces the action's default of --all-features, so that one is repeated.
+          arguments: --all-features --locked
+          command: check bans licenses sources
+
+  # Not a required check: a new RustSec entry can fail it with no change in the repository.
+  advisories:
+    name: "cargo deny advisories"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
+        with:
+          arguments: --all-features --locked
+          command: check advisories
