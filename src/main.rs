@@ -1,5 +1,6 @@
 mod chain;
 mod cli;
+mod dht;
 mod report;
 
 use std::process::ExitCode;
