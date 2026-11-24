@@ -6,9 +6,11 @@ use anyhow::bail;
 use libp2p::{
     PeerId, StreamProtocol, Swarm, SwarmBuilder,
     futures::StreamExt,
-    kad::{self, store::MemoryStore},
+    kad::{self, Event::OutboundQueryProgressed, QueryStats, store::MemoryStore},
     multiaddr::{Multiaddr, Protocol},
-    noise, tcp, yamux,
+    noise,
+    swarm::SwarmEvent,
+    tcp, yamux,
 };
 
 /// Substrate nodes list many addresses for each peer they return, and their answers overflow
@@ -56,28 +58,19 @@ pub async fn join(
         .with_behaviour(|key| kademlia(key.public().to_peer_id(), genesis_hash, bootnodes))?
         .build();
 
-    // The first answer is enough: it shows that a boot node speaks this chain's protocol. Lookups
-    // don't need a fuller routing table, as each walks from the boot nodes to the peers closest
-    // to its key.
-    let bootstrap = swarm.behaviour_mut().bootstrap()?;
-    loop {
-        swarm.select_next_some().await;
-
-        match swarm.behaviour_mut().query_mut(&bootstrap) {
-            Some(mut query) if query.stats().num_successes() > 0 => {
-                query.finish();
-                return Ok(swarm);
-            }
-            Some(_) => {}
-            None => {
-                let protocol = &swarm.behaviour().protocol_names()[0];
-                bail!(
-                    "no boot node answered on {protocol}: they are unreachable or belong to \
-                     another chain"
-                );
-            }
-        }
+    // Not a full bootstrap: its first stage is this lookup of our own peer id, and the later stages
+    // only fill the routing table, which lookups don't need, as each walks from the boot nodes to
+    // the peers closest to its key. Any answer shows that a boot node speaks this chain's protocol.
+    let local_peer_id = *swarm.local_peer_id();
+    let stats = lookup_closest_peers(&mut swarm, local_peer_id).await;
+    if stats.num_successes() == 0 {
+        let protocol = &swarm.behaviour().protocol_names()[0];
+        bail!(
+            "no boot node answered on {protocol}: they are unreachable or belong to another chain"
+        );
     }
+
+    Ok(swarm)
 }
 
 /// A Kademlia client that knows only the boot nodes.
@@ -99,6 +92,24 @@ fn kademlia(
     }
 
     kademlia
+}
+
+/// Look up the peers closest to the key and return the lookup's stats once it ends.
+///
+/// The lookup reports only once, when it ends, so its first event is the result.
+async fn lookup_closest_peers(
+    swarm: &mut Swarm<kad::Behaviour<MemoryStore>>,
+    key: PeerId,
+) -> QueryStats {
+    let query = swarm.behaviour_mut().get_closest_peers(key);
+    loop {
+        if let SwarmEvent::Behaviour(OutboundQueryProgressed { id, stats, .. }) =
+            swarm.select_next_some().await
+            && id == query
+        {
+            return stats;
+        }
+    }
 }
 
 #[cfg(test)]
