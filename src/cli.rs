@@ -5,7 +5,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(version)]
 pub struct Cli {
-    /// RPC endpoint of a node of the chain: wss or https, or ws and http on localhost.
+    /// RPC endpoint of a node of the chain: wss, or ws on localhost.
     #[arg(long, value_name = "URL")]
     pub rpc: String,
 }

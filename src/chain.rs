@@ -18,7 +18,7 @@ pub struct Validator {
 pub async fn current_validators(rpc: &str) -> anyhow::Result<Vec<Validator>> {
     let client = OnlineClient::<SubstrateConfig>::from_url(rpc)
         .await
-        .with_context(|| format!("failed to connect to {rpc}"))?;
+        .context("failed to connect to the RPC endpoint")?;
     let at = client
         .at_current_block()
         .await
