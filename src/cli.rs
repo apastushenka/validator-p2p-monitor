@@ -2,7 +2,7 @@
 
 use clap::Parser;
 
-use crate::dht::Bootnode;
+use crate::network::Bootnode;
 
 #[derive(Parser)]
 #[command(version)]

@@ -2769,6 +2769,7 @@ dependencies = [
  "hashlink",
  "libp2p-core",
  "libp2p-identity",
+ "libp2p-swarm-derive",
  "multistream-select",
  "rand 0.10.4",
  "smallvec",
@@ -2776,6 +2777,17 @@ dependencies = [
  "tracing",
  "wasm-bindgen-futures",
  "web-time",
+]
+
+[[package]]
+name = "libp2p-swarm-derive"
+version = "0.36.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fbfd25141698cdf6878f26a839f28caa54a7906fbb3e6d0988b9eeb34dea3103"
+dependencies = [
+ "heck",
+ "quote",
+ "syn 3.0.10",
 ]
 
 [[package]]
