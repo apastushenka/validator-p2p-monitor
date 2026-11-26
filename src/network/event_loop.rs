@@ -42,17 +42,19 @@ impl EventLoop {
     }
 
     fn handle_command(&mut self, command: Command) {
-        match command {
+        let kademlia = &mut self.swarm.behaviour_mut().kademlia;
+        let (query, progress) = match command {
             Command::GetClosestPeers { key, progress } => {
-                let query = self.swarm.behaviour_mut().kademlia.get_closest_peers(key);
-                self.pending_queries.insert(query, progress);
+                (kademlia.get_closest_peers(key), progress)
             }
-        }
+            Command::GetRecord { key, progress } => (kademlia.get_record(key), progress),
+        };
+        self.pending_queries.insert(query, progress);
     }
 
     /// Forward the event of a query to whoever started it, and forget the query after its last.
     fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent>) {
-        let Ok(BehaviourEvent::Kademlia(OutboundQueryProgressed { id, stats, step, .. })) =
+        let Ok(BehaviourEvent::Kademlia(OutboundQueryProgressed { id, result, stats, step })) =
             event.try_into_behaviour_event()
         else {
             return;
@@ -61,10 +63,15 @@ impl EventLoop {
             return;
         };
 
-        // Nobody needs the event when the caller has stopped waiting for the query.
-        let _ = progress.send(Progress { stats });
+        let sent = progress.send(Progress { result, stats, last: step.last });
         if step.last {
             self.pending_queries.remove(&id);
+        } else if sent.is_err() {
+            // Whoever started the query has stopped waiting for it, so the query can end now. Its
+            // last event still comes and removes it from the pending ones.
+            if let Some(mut query) = self.swarm.behaviour_mut().kademlia.query_mut(&id) {
+                query.finish();
+            }
         }
     }
 }
