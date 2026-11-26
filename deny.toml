@@ -9,6 +9,7 @@ yanked = "deny"
 # Only licenses that crates in the graph use; a PR that brings a new one adds it here.
 allow = [
     "Apache-2.0",
+    "BSD-2-Clause",
     "BSD-3-Clause",
     "CC0-1.0",
     "CDLA-Permissive-2.0",

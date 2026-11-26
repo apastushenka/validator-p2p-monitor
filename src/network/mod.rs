@@ -7,17 +7,14 @@
 
 mod dht;
 mod event_loop;
+mod global_only;
 
 use std::error::Error;
 
 use anyhow::Context;
 use libp2p::{
     PeerId, Swarm, SwarmBuilder, Transport,
-    core::{
-        muxing::StreamMuxerBox,
-        transport::{Boxed, global_only},
-        upgrade::Version,
-    },
+    core::{muxing::StreamMuxerBox, transport::Boxed, upgrade::Version},
     dns,
     identity::Keypair,
     kad::{self, QueryResult, QueryStats, RecordKey, store::MemoryStore},
@@ -133,12 +130,13 @@ mod tests {
         for address in [
             format!("/ip4/127.0.0.1/tcp/{port}"),
             format!("/ip4/127.0.0.1/tcp/{port}/ws"),
+            format!("/ip4/8.8.8.8/ip4/127.0.0.1/tcp/{port}"),
         ] {
             swarm.dial(address.parse::<Multiaddr>().unwrap()).unwrap();
         }
 
         let mut failed = 0;
-        while failed < 2 {
+        while failed < 3 {
             match swarm.select_next_some().await {
                 SwarmEvent::OutgoingConnectionError { .. } => failed += 1,
                 SwarmEvent::ConnectionEstablished { endpoint, .. } => {
