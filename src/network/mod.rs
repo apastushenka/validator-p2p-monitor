@@ -18,7 +18,7 @@ use libp2p::{
 };
 use tokio::sync::mpsc;
 
-pub use self::dht::Bootnode;
+pub use self::dht::{Bootnode, RecordLookup};
 use self::event_loop::EventLoop;
 
 const STOPPED: &str = "the network event loop stopped";
