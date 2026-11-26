@@ -1,3 +1,4 @@
+mod address;
 mod chain;
 mod cli;
 mod network;

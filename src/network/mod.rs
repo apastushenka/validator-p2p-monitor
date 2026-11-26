@@ -7,14 +7,20 @@
 
 mod dht;
 mod event_loop;
+mod global_only;
+
+use std::error::Error;
 
 use anyhow::Context;
 use libp2p::{
-    PeerId, Swarm, SwarmBuilder,
+    PeerId, Swarm, SwarmBuilder, Transport,
+    core::{muxing::StreamMuxerBox, transport::Boxed, upgrade::Version},
+    dns,
+    identity::Keypair,
     kad::{self, QueryResult, QueryStats, RecordKey, store::MemoryStore},
     noise,
     swarm::NetworkBehaviour,
-    tcp, yamux,
+    tcp, websocket, yamux,
 };
 use tokio::sync::mpsc;
 
@@ -75,18 +81,85 @@ struct Progress {
 async fn swarm(genesis_hash: [u8; 32], bootnodes: &[Bootnode]) -> anyhow::Result<Swarm<Behaviour>> {
     Ok(SwarmBuilder::with_new_identity()
         .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )?
-        .with_dns()?
-        // A node listens on WebSocket instead of plain TCP unless it is a validator or sets
-        // --listen-addr, and a validator may set a WebSocket address there too.
-        .with_websocket(noise::Config::new, yamux::Config::default)
-        .await?
+        .with_other_transport(transport)?
         .with_behaviour(|key| Behaviour {
             kademlia: dht::kademlia(key.public().to_peer_id(), genesis_hash, bootnodes),
         })?
         .build())
+}
+
+fn transport(
+    key: &Keypair,
+) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error + Send + Sync>> {
+    // Peers announce their loopback and private addresses too, and a dial to one of those reaches
+    // this machine or its network, so only global addresses are dialed. The filter sits right above
+    // TCP and under DNS, so it checks the address that a name resolves to.
+    let tcp = || global_only::Transport::new(tcp::tokio::Transport::new(tcp::Config::default()));
+
+    // DNS sits above the handshake, as in libp2p's builder: when a resolved address takes the TCP
+    // connection but fails the handshake, DNS goes on to the next one.
+    let plain = dns::tokio::Transport::system(
+        tcp()
+            .upgrade(Version::V1Lazy)
+            .authenticate(noise::Config::new(key)?)
+            .multiplex(yamux::Config::default()),
+    )?;
+
+    // A node listens on WebSocket instead of plain TCP unless it is a validator or sets
+    // --listen-addr, and a validator may set a WebSocket address there too. WebSocket needs DNS
+    // under it rather than above, as TLS takes the host name of a /dns address.
+    let websocket = websocket::Config::new(dns::tokio::Transport::system(tcp())?)
+        .upgrade(Version::V1Lazy)
+        .authenticate(noise::Config::new(key)?)
+        .multiplex(yamux::Config::default());
+
+    Ok(websocket
+        .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .or_transport(plain.map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer))))
+        .map(|either, _| either.into_inner())
+        .boxed())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::ErrorKind, net::TcpListener};
+
+    use libp2p::{Multiaddr, futures::StreamExt, swarm::SwarmEvent};
+
+    use super::swarm;
+
+    #[tokio::test]
+    async fn service_on_loopback_gets_no_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let mut swarm = swarm([0; 32], &[]).await.unwrap();
+        for address in [
+            format!("/ip4/127.0.0.1/tcp/{port}"),
+            format!("/ip4/127.0.0.1/tcp/{port}/ws"),
+            format!("/ip4/8.8.8.8/ip4/127.0.0.1/tcp/{port}"),
+        ] {
+            swarm.dial(address.parse::<Multiaddr>().unwrap()).unwrap();
+        }
+
+        let mut failed = 0;
+        while failed < 3 {
+            match swarm.select_next_some().await {
+                SwarmEvent::OutgoingConnectionError { .. } => failed += 1,
+                SwarmEvent::ConnectionEstablished { endpoint, .. } => {
+                    panic!("connected to {}", endpoint.get_remote_address())
+                }
+                _ => {}
+            }
+        }
+
+        let accepted = listener.accept().map(|(_, peer)| peer);
+        assert!(
+            accepted
+                .as_ref()
+                .is_err_and(|err| err.kind() == ErrorKind::WouldBlock),
+            "{accepted:?}"
+        );
+    }
 }
