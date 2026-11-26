@@ -1,5 +1,7 @@
 //! What kind of p2p address a peer publishes, told apart without the network.
 
+use std::net::IpAddr;
+
 use ip_network::IpNetwork;
 use libp2p::multiaddr::{Multiaddr, Protocol};
 
@@ -9,12 +11,17 @@ use libp2p::multiaddr::{Multiaddr, Protocol};
 /// gets dialed depends on the transport, as libp2p-tcp takes the last one.
 pub fn is_global(address: &Multiaddr) -> bool {
     let mut ips = address.iter().filter_map(|protocol| match protocol {
-        Protocol::Ip4(ip) => Some(IpNetwork::from(ip)),
-        Protocol::Ip6(ip) => Some(IpNetwork::from(ip)),
+        Protocol::Ip4(ip) => Some(IpAddr::V4(ip)),
+        Protocol::Ip6(ip) => Some(IpAddr::V6(ip)),
         _ => None,
     });
 
-    matches!((ips.next(), ips.next()), (Some(ip), None) if ip.is_global())
+    // The canonical form turns an IPv4-mapped IPv6 address into its IPv4 one, which ip_network
+    // would otherwise take for a global address.
+    matches!(
+        (ips.next(), ips.next()),
+        (Some(ip), None) if IpNetwork::from(ip.to_canonical()).is_global()
+    )
 }
 
 #[cfg(test)]
@@ -29,6 +36,7 @@ mod tests {
     fn global_address_is_dialed() {
         assert!(check("/ip4/8.8.8.8/tcp/30333"));
         assert!(check("/ip6/2001:4860:4860::8888/tcp/30333"));
+        assert!(check("/ip6/::ffff:8.8.8.8/tcp/30333"));
     }
 
     #[test]
@@ -37,6 +45,8 @@ mod tests {
         assert!(!check("/ip4/10.0.0.1/tcp/30333"));
         assert!(!check("/ip4/192.168.1.1/tcp/30333"));
         assert!(!check("/ip6/::1/tcp/30333"));
+        assert!(!check("/ip6/::ffff:127.0.0.1/tcp/30333"));
+        assert!(!check("/ip6/::ffff:10.0.0.1/tcp/30333"));
     }
 
     #[test]
