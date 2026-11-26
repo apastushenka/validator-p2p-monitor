@@ -92,23 +92,31 @@ fn transport(
     key: &Keypair,
 ) -> Result<Boxed<(PeerId, StreamMuxerBox)>, Box<dyn Error + Send + Sync>> {
     // Peers announce their loopback and private addresses too, and a dial to one of those reaches
-    // this machine or its network, so only global addresses are dialed. DNS sits above the filter,
-    // which then checks the address a name resolves to.
-    let tcp = || {
-        let tcp = tcp::tokio::Transport::new(tcp::Config::default());
-        dns::tokio::Transport::system(global_only::Transport::new(tcp))
-    };
+    // this machine or its network, so only global addresses are dialed. The filter sits right above
+    // TCP and under DNS, so it checks the address that a name resolves to.
+    let tcp = || global_only::Transport::new(tcp::tokio::Transport::new(tcp::Config::default()));
+
+    // DNS sits above the handshake, as in libp2p's builder: when a resolved address takes the TCP
+    // connection but fails the handshake, DNS goes on to the next one.
+    let plain = dns::tokio::Transport::system(
+        tcp()
+            .upgrade(Version::V1Lazy)
+            .authenticate(noise::Config::new(key)?)
+            .multiplex(yamux::Config::default()),
+    )?;
+
     // A node listens on WebSocket instead of plain TCP unless it is a validator or sets
     // --listen-addr, and a validator may set a WebSocket address there too. WebSocket needs DNS
     // under it rather than above, as TLS takes the host name of a /dns address.
-    let websocket = websocket::Config::new(tcp()?);
-
-    Ok(websocket
-        .or_transport(tcp()?)
+    let websocket = websocket::Config::new(dns::tokio::Transport::system(tcp())?)
         .upgrade(Version::V1Lazy)
         .authenticate(noise::Config::new(key)?)
-        .multiplex(yamux::Config::default())
+        .multiplex(yamux::Config::default());
+
+    Ok(websocket
         .map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer)))
+        .or_transport(plain.map(|(peer_id, muxer), _| (peer_id, StreamMuxerBox::new(muxer))))
+        .map(|either, _| either.into_inner())
         .boxed())
 }
 
