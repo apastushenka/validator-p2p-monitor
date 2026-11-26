@@ -11,7 +11,7 @@ mod event_loop;
 use anyhow::Context;
 use libp2p::{
     PeerId, Swarm, SwarmBuilder,
-    kad::{self, QueryStats, store::MemoryStore},
+    kad::{self, QueryResult, QueryStats, RecordKey, store::MemoryStore},
     noise,
     swarm::NetworkBehaviour,
     tcp, yamux,
@@ -59,11 +59,17 @@ enum Command {
         key: PeerId,
         progress: mpsc::UnboundedSender<Progress>,
     },
+    GetRecord {
+        key: RecordKey,
+        progress: mpsc::UnboundedSender<Progress>,
+    },
 }
 
 /// One event of a running query, as the event loop forwards it to whoever started the query.
 struct Progress {
+    result: QueryResult,
     stats: QueryStats,
+    last: bool,
 }
 
 async fn swarm(genesis_hash: [u8; 32], bootnodes: &[Bootnode]) -> anyhow::Result<Swarm<Behaviour>> {

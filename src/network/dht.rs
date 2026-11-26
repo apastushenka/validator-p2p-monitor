@@ -5,9 +5,12 @@ use std::str::FromStr;
 use anyhow::{Context, bail};
 use libp2p::{
     PeerId, StreamProtocol,
-    kad::{self, store::MemoryStore},
+    kad::{
+        self, GetRecordError, GetRecordOk, PeerRecord, QueryResult, RecordKey, store::MemoryStore,
+    },
     multiaddr::{Multiaddr, Protocol},
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use super::{Command, Network, Progress, STOPPED};
@@ -37,6 +40,46 @@ impl FromStr for Bootnode {
     }
 }
 
+#[derive(Default)]
+pub struct RecordLookup {
+    /// The distinct values that peers returned, in the order they came, neither decoded nor
+    /// verified yet. Peers may hold different publications of the record.
+    pub versions: Vec<Vec<u8>>,
+    /// The lookup ran into Kademlia's query timeout before it reached the peers closest to the
+    /// key. The versions found by then are kept.
+    pub timed_out: bool,
+    /// How many peers answered the lookup's requests, with the record or without it. Under 20,
+    /// Kademlia's replication factor, the lookup cannot have heard from all the peers closest to
+    /// the key.
+    pub peers_answered: u32,
+}
+
+impl RecordLookup {
+    /// Take in one event of the lookup, and return whether it was the last.
+    fn update(&mut self, Progress { result, stats, last }: Progress) -> bool {
+        let QueryResult::GetRecord(result) = result else {
+            return last;
+        };
+
+        match result {
+            Ok(GetRecordOk::FoundRecord(PeerRecord { record, .. })) => {
+                if !self.versions.contains(&record.value) {
+                    self.versions.push(record.value);
+                }
+            }
+            Ok(GetRecordOk::FinishedWithNoAdditionalRecord { .. }) => {}
+            Err(GetRecordError::Timeout { .. }) => self.timed_out = true,
+            Err(GetRecordError::NotFound { .. }) => {}
+        }
+
+        if last {
+            self.peers_answered = stats.num_successes();
+        }
+
+        last
+    }
+}
+
 impl Network {
     /// Enter the DHT through the boot nodes.
     pub async fn join(&self) -> anyhow::Result<()> {
@@ -52,7 +95,7 @@ impl Network {
         self.send(cmd).await?;
 
         // The lookup reports only once, when it ends, so its first event is the result.
-        let Progress { stats } = events.recv().await.context(STOPPED)?;
+        let Progress { stats, .. } = events.recv().await.context(STOPPED)?;
         if stats.num_successes() == 0 {
             bail!(
                 "no boot node answered on this chain's Kademlia protocol: they are unreachable or \
@@ -61,6 +104,29 @@ impl Network {
         }
 
         Ok(())
+    }
+
+    /// Look up the record of an authority discovery key, and return what the lookup found once
+    /// it ends.
+    pub async fn find_record(
+        &self,
+        authority_discovery_key: [u8; 32],
+    ) -> anyhow::Result<RecordLookup> {
+        let (progress, mut events) = mpsc::unbounded_channel();
+
+        let cmd = Command::GetRecord {
+            key: record_key(&authority_discovery_key),
+            progress,
+        };
+        self.send(cmd).await?;
+
+        let mut lookup = RecordLookup::default();
+        while let Some(progress) = events.recv().await {
+            if lookup.update(progress) {
+                return Ok(lookup);
+            }
+        }
+        bail!(STOPPED)
     }
 }
 
@@ -85,9 +151,20 @@ pub fn kademlia(
     kademlia
 }
 
+/// Substrate publishes the record of an authority discovery key under the key's SHA-256.
+fn record_key(authority_discovery_key: &[u8; 32]) -> RecordKey {
+    RecordKey::new(&Sha256::digest(authority_discovery_key))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Bootnode;
+    use std::collections::BTreeMap;
+
+    use libp2p::kad::{
+        GetRecordError, GetRecordOk, PeerRecord, QueryResult, QueryStats, Record, RecordKey,
+    };
+
+    use super::{Bootnode, Progress, RecordLookup};
 
     const PEER_ID: &str = "12D3KooWSz8r2WyCdsfWHgPyvD8GKQdJ1UAiRmrcrs8sQB3fe2KU";
 
@@ -117,5 +194,68 @@ mod tests {
     #[test]
     fn bootnode_with_peer_id_only_is_rejected() {
         assert!(format!("/p2p/{PEER_ID}").parse::<Bootnode>().is_err());
+    }
+
+    fn found(value: &[u8]) -> Progress {
+        let record = Record::new(RecordKey::new(&[0]), value.to_vec());
+        Progress {
+            result: QueryResult::GetRecord(Ok(GetRecordOk::FoundRecord(PeerRecord {
+                peer: None,
+                record,
+            }))),
+            stats: QueryStats::empty(),
+            last: false,
+        }
+    }
+
+    fn finished() -> Progress {
+        Progress {
+            result: QueryResult::GetRecord(Ok(GetRecordOk::FinishedWithNoAdditionalRecord {
+                cache_candidates: BTreeMap::new(),
+            })),
+            stats: QueryStats::empty(),
+            last: true,
+        }
+    }
+
+    fn timed_out() -> Progress {
+        Progress {
+            result: QueryResult::GetRecord(Err(GetRecordError::Timeout {
+                key: RecordKey::new(&[0]),
+            })),
+            stats: QueryStats::empty(),
+            last: true,
+        }
+    }
+
+    #[test]
+    fn lookup_keeps_each_version_once() {
+        let mut lookup = RecordLookup::default();
+
+        for progress in [found(b"old"), found(b"new"), found(b"old"), finished()] {
+            lookup.update(progress);
+        }
+
+        assert_eq!(lookup.versions, [b"old".to_vec(), b"new".to_vec()]);
+        assert!(!lookup.timed_out);
+    }
+
+    #[test]
+    fn lookup_ends_on_last_event() {
+        let mut lookup = RecordLookup::default();
+
+        assert!(!lookup.update(found(b"record")));
+        assert!(lookup.update(finished()));
+    }
+
+    #[test]
+    fn timed_out_lookup_keeps_found_versions() {
+        let mut lookup = RecordLookup::default();
+
+        lookup.update(found(b"record"));
+        lookup.update(timed_out());
+
+        assert_eq!(lookup.versions, [b"record".to_vec()]);
+        assert!(lookup.timed_out);
     }
 }
