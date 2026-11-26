@@ -10,8 +10,8 @@ publish = false
 anyhow = { version = "1.0.105" }
 clap = { version = "4.6.9", features = ["derive"] }
 hex = { version = "0.4.3" }
-libp2p = { version = "0.57.1", features = ["dns", "ed25519", "kad", "noise", "tcp", "tokio", "websocket", "yamux"] }
+libp2p = { version = "0.57.1", features = ["dns", "ed25519", "kad", "macros", "noise", "tcp", "tokio", "websocket", "yamux"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154" }
 subxt = { version = "0.51.1" }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }

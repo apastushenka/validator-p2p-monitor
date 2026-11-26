@@ -2,16 +2,15 @@
 
 use std::str::FromStr;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use libp2p::{
-    PeerId, StreamProtocol, Swarm, SwarmBuilder,
-    futures::StreamExt,
-    kad::{self, Event::OutboundQueryProgressed, QueryStats, store::MemoryStore},
+    PeerId, StreamProtocol,
+    kad::{self, store::MemoryStore},
     multiaddr::{Multiaddr, Protocol},
-    noise,
-    swarm::SwarmEvent,
-    tcp, yamux,
 };
+use tokio::sync::mpsc;
+
+use super::{Command, Network, Progress, STOPPED};
 
 /// Substrate nodes list many addresses for each peer they return, and their answers overflow
 /// the 16 KiB that libp2p allows by default: every request then fails.
@@ -38,43 +37,35 @@ impl FromStr for Bootnode {
     }
 }
 
-/// Enter the DHT as a client, which neither stores records nor answers queries.
-pub async fn join(
-    genesis_hash: [u8; 32],
-    bootnodes: &[Bootnode],
-) -> anyhow::Result<Swarm<kad::Behaviour<MemoryStore>>> {
-    let mut swarm = SwarmBuilder::with_new_identity()
-        .with_tokio()
-        .with_tcp(
-            tcp::Config::default(),
-            noise::Config::new,
-            yamux::Config::default,
-        )?
-        .with_dns()?
-        // A node listens on WebSocket instead of plain TCP unless it is a validator or sets
-        // --listen-addr, and a validator may set a WebSocket address there too.
-        .with_websocket(noise::Config::new, yamux::Config::default)
-        .await?
-        .with_behaviour(|key| kademlia(key.public().to_peer_id(), genesis_hash, bootnodes))?
-        .build();
+impl Network {
+    /// Enter the DHT through the boot nodes.
+    pub async fn join(&self) -> anyhow::Result<()> {
+        // Not a full bootstrap: only its first stage, the lookup of our own peer id, as Kademlia
+        // runs the whole of it in the background by itself. Any answer shows that a boot node
+        // speaks this chain's protocol.
+        let (progress, mut events) = mpsc::unbounded_channel();
 
-    // Not a full bootstrap: its first stage is this lookup of our own peer id, and the later stages
-    // only fill the routing table, which lookups don't need, as each walks from the boot nodes to
-    // the peers closest to its key. Any answer shows that a boot node speaks this chain's protocol.
-    let local_peer_id = *swarm.local_peer_id();
-    let stats = lookup_closest_peers(&mut swarm, local_peer_id).await;
-    if stats.num_successes() == 0 {
-        let protocol = &swarm.behaviour().protocol_names()[0];
-        bail!(
-            "no boot node answered on {protocol}: they are unreachable or belong to another chain"
-        );
+        let cmd = Command::GetClosestPeers {
+            key: self.local_peer_id,
+            progress,
+        };
+        self.send(cmd).await?;
+
+        // The lookup reports only once, when it ends, so its first event is the result.
+        let Progress { stats } = events.recv().await.context(STOPPED)?;
+        if stats.num_successes() == 0 {
+            bail!(
+                "no boot node answered on this chain's Kademlia protocol: they are unreachable or \
+                 belong to another chain"
+            );
+        }
+
+        Ok(())
     }
-
-    Ok(swarm)
 }
 
 /// A Kademlia client that knows only the boot nodes.
-fn kademlia(
+pub fn kademlia(
     peer_id: PeerId,
     genesis_hash: [u8; 32],
     bootnodes: &[Bootnode],
@@ -92,24 +83,6 @@ fn kademlia(
     }
 
     kademlia
-}
-
-/// Look up the peers closest to the key and return the lookup's stats once it ends.
-///
-/// The lookup reports only once, when it ends, so its first event is the result.
-async fn lookup_closest_peers(
-    swarm: &mut Swarm<kad::Behaviour<MemoryStore>>,
-    key: PeerId,
-) -> QueryStats {
-    let query = swarm.behaviour_mut().get_closest_peers(key);
-    loop {
-        if let SwarmEvent::Behaviour(OutboundQueryProgressed { id, stats, .. }) =
-            swarm.select_next_some().await
-            && id == query
-        {
-            return stats;
-        }
-    }
 }
 
 #[cfg(test)]

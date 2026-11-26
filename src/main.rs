@@ -1,11 +1,11 @@
 mod chain;
 mod cli;
-mod dht;
+mod network;
 mod report;
 
 use std::process::ExitCode;
 
-use crate::{chain::Chain, report::Report};
+use crate::{chain::Chain, network::Network, report::Report};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -21,7 +21,8 @@ async fn main() -> ExitCode {
 async fn run() -> anyhow::Result<()> {
     let cli = cli::parse();
     let chain = Chain::connect(&cli.rpc).await?;
-    let _swarm = dht::join(chain.genesis_hash(), &cli.bootnodes).await?;
+    let network = Network::new(chain.genesis_hash(), &cli.bootnodes).await?;
+    network.join().await?;
     let validators = chain.current_validators().await?;
     let report = Report::new(&validators);
     println!("{}", serde_json::to_string_pretty(&report)?);

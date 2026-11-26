@@ -2,6 +2,8 @@ edition = "2024"
 style_edition = "2024"
 
 max_width = 100
+# The default, 18, breaks a struct pattern of three short fields over several lines.
+struct_lit_width = 30
 newline_style = "Unix"
 
 use_field_init_shorthand = true
