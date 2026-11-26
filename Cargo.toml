@@ -14,4 +14,4 @@ libp2p = { version = "0.57.1", features = ["dns", "ed25519", "kad", "macros", "n
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154" }
 subxt = { version = "0.51.1" }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }

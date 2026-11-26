@@ -21,7 +21,8 @@ async fn main() -> ExitCode {
 async fn run() -> anyhow::Result<()> {
     let cli = cli::parse();
     let chain = Chain::connect(&cli.rpc).await?;
-    let _network = Network::join(chain.genesis_hash(), &cli.bootnodes).await?;
+    let network = Network::new(chain.genesis_hash(), &cli.bootnodes).await?;
+    network.join().await?;
     let validators = chain.current_validators().await?;
     let report = Report::new(&validators);
     println!("{}", serde_json::to_string_pretty(&report)?);

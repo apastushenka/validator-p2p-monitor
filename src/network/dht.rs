@@ -2,15 +2,15 @@
 
 use std::str::FromStr;
 
+use anyhow::{Context, bail};
 use libp2p::{
     PeerId, StreamProtocol,
-    futures::StreamExt,
-    kad::{self, Event::OutboundQueryProgressed, QueryStats, store::MemoryStore},
+    kad::{self, store::MemoryStore},
     multiaddr::{Multiaddr, Protocol},
-    swarm::SwarmEvent,
 };
+use tokio::sync::mpsc;
 
-use super::{BehaviourEvent::Kademlia, Network};
+use super::{Command, Network, Progress, STOPPED};
 
 /// Substrate nodes list many addresses for each peer they return, and their answers overflow
 /// the 16 KiB that libp2p allows by default: every request then fails.
@@ -37,6 +37,33 @@ impl FromStr for Bootnode {
     }
 }
 
+impl Network {
+    /// Enter the DHT through the boot nodes.
+    pub async fn join(&self) -> anyhow::Result<()> {
+        // Not a full bootstrap: only its first stage, the lookup of our own peer id, as Kademlia
+        // runs the whole of it in the background by itself. Any answer shows that a boot node
+        // speaks this chain's protocol.
+        let (progress, mut events) = mpsc::unbounded_channel();
+
+        let cmd = Command::GetClosestPeers {
+            key: self.local_peer_id,
+            progress,
+        };
+        self.send(cmd).await?;
+
+        // The lookup reports only once, when it ends, so its first event is the result.
+        let Progress { stats } = events.recv().await.context(STOPPED)?;
+        if stats.num_successes() == 0 {
+            bail!(
+                "no boot node answered on this chain's Kademlia protocol: they are unreachable or \
+                 belong to another chain"
+            );
+        }
+
+        Ok(())
+    }
+}
+
 /// A Kademlia client that knows only the boot nodes.
 pub fn kademlia(
     peer_id: PeerId,
@@ -56,23 +83,6 @@ pub fn kademlia(
     }
 
     kademlia
-}
-
-impl Network {
-    /// Look up the peers closest to the key and return the lookup's stats once it ends.
-    ///
-    /// The lookup reports only once, when it ends, so its first event is the result.
-    pub(super) async fn lookup_closest_peers(&mut self, key: PeerId) -> QueryStats {
-        let query = self.swarm.behaviour_mut().kademlia.get_closest_peers(key);
-        loop {
-            if let SwarmEvent::Behaviour(Kademlia(OutboundQueryProgressed { id, stats, .. })) =
-                self.swarm.select_next_some().await
-                && id == query
-            {
-                return stats;
-            }
-        }
-    }
 }
 
 #[cfg(test)]
