@@ -8,6 +8,7 @@ use subxt::{
 };
 
 /// A validator of the current session with the key it publishes its addresses under.
+#[derive(Clone)]
 pub struct Validator {
     /// The stash account: 20 or 32 bytes, depending on the chain.
     pub account: Vec<u8>,

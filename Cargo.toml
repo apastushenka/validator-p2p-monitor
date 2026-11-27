@@ -17,11 +17,11 @@ libp2p = { version = "0.57.1", features = ["dns", "ed25519", "kad", "macros", "n
 parity-scale-codec = { version = "3.7.5" }
 prost = { version = "0.14.6" }
 schnorrkel = { version = "0.11.5", default-features = false, features = ["getrandom"] }
-serde = { version = "1.0.229", features = ["derive"] }
-serde_json = { version = "1.0.154" }
 sha2 = { version = "0.11.1" }
 subxt = { version = "0.51.1" }
-time = { version = "0.3.55", features = ["formatting"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["test-util"] }

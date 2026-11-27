@@ -15,6 +15,16 @@ pub struct Cli {
     /// that end in /p2p/<peer id>, such as the bootNodes of the chain spec.
     #[arg(long, value_name = "ADDR", num_args = 1.., required = true)]
     pub bootnodes: Vec<Bootnode>,
+
+    /// How often each validator is checked, in seconds. After the start, the first check of every
+    /// validator begins within one interval.
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 600,
+        value_parser = clap::value_parser!(u64).range(1..),
+    )]
+    pub check_interval_seconds: u64,
 }
 
 /// Parse the process arguments, or exit with clap's own message and status.

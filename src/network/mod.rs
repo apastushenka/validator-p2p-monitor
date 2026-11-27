@@ -29,6 +29,7 @@ use self::event_loop::EventLoop;
 
 const STOPPED: &str = "the network event loop stopped";
 
+#[derive(Clone)]
 pub struct Network {
     commands: mpsc::Sender<Command>,
     local_peer_id: PeerId,
