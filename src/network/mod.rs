@@ -15,8 +15,8 @@ use anyhow::Context;
 use libp2p::{
     PeerId, Swarm, SwarmBuilder, Transport,
     core::{muxing::StreamMuxerBox, transport::Boxed, upgrade::Version},
-    dns,
-    identity::Keypair,
+    dns, identify,
+    identity::{Keypair, PublicKey},
     kad::{self, QueryResult, QueryStats, RecordKey, store::MemoryStore},
     noise,
     swarm::NetworkBehaviour,
@@ -28,6 +28,13 @@ pub use self::dht::{Bootnode, RecordLookup};
 use self::event_loop::EventLoop;
 
 const STOPPED: &str = "the network event loop stopped";
+
+/// The same as Substrate nodes announce.
+const PROTOCOL_VERSION: &str = "/substrate/1.0";
+
+/// Lets node operators tell the monitor apart: a Substrate node logs the identify info of each
+/// peer at the trace level of `sub-libp2p`.
+const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 pub struct Network {
     commands: mpsc::Sender<Command>,
@@ -55,6 +62,7 @@ impl Network {
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     kademlia: kad::Behaviour<MemoryStore>,
+    identify: identify::Behaviour,
 }
 
 /// Each command that starts a query carries the channel that the query's events go to. The
@@ -84,8 +92,16 @@ async fn swarm(genesis_hash: [u8; 32], bootnodes: &[Bootnode]) -> anyhow::Result
         .with_other_transport(transport)?
         .with_behaviour(|key| Behaviour {
             kademlia: dht::kademlia(key.public().to_peer_id(), genesis_hash, bootnodes),
+            identify: identify(key.public()),
         })?
         .build())
+}
+
+fn identify(key: PublicKey) -> identify::Behaviour {
+    let config = identify::Config::new(PROTOCOL_VERSION.to_string(), key)
+        .with_agent_version(AGENT_VERSION.to_string());
+
+    identify::Behaviour::new(config)
 }
 
 fn transport(
