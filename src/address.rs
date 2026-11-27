@@ -3,7 +3,10 @@
 use std::net::IpAddr;
 
 use ip_network::IpNetwork;
-use libp2p::multiaddr::{Multiaddr, Protocol};
+use libp2p::{
+    PeerId,
+    multiaddr::{Multiaddr, Protocol},
+};
 
 /// Whether a dial to the address reaches a global IP and nothing else.
 ///
@@ -24,9 +27,20 @@ pub fn is_global(address: &Multiaddr) -> bool {
     )
 }
 
+/// The peer id from the last `/p2p` of the address. An address through a relay has another
+/// `/p2p` before `/p2p-circuit`, with the relay's peer id.
+pub fn peer_id(address: &Multiaddr) -> Option<PeerId> {
+    match address.iter().last() {
+        Some(Protocol::P2p(peer_id)) => Some(peer_id),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_global;
+    use libp2p::PeerId;
+
+    use super::{is_global, peer_id};
 
     fn check(address: &str) -> bool {
         is_global(&address.parse().unwrap())
@@ -58,5 +72,18 @@ mod tests {
     #[test]
     fn address_without_ip_is_not_dialed() {
         assert!(!check("/dns/example.com/tcp/30333"));
+    }
+
+    #[test]
+    fn relayed_address_names_its_destination() {
+        let (relay, destination) = (PeerId::random(), PeerId::random());
+        let address = format!("/ip4/8.8.8.8/tcp/30333/p2p/{relay}/p2p-circuit/p2p/{destination}");
+
+        assert_eq!(peer_id(&address.parse().unwrap()), Some(destination));
+    }
+
+    #[test]
+    fn address_without_p2p_names_no_peer() {
+        assert_eq!(peer_id(&"/ip4/8.8.8.8/tcp/30333".parse().unwrap()), None);
     }
 }
