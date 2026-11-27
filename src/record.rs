@@ -56,6 +56,7 @@ mod schema {
 const SIGNING_CONTEXT: &[u8] = b"substrate";
 
 /// A record that passed both signature checks.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Record {
     /// The peer the addresses name, whose key signed the record.
     pub peer_id: PeerId,
@@ -166,15 +167,25 @@ fn single_peer_id(addresses: &[Multiaddr]) -> anyhow::Result<PeerId> {
     }
 }
 
+/// The records with the latest creation time, each once. The node counts a record without a time
+/// as the oldest, so all records stay only when none has a time. The same record comes back in
+/// several versions, as each republishing signs it anew and sr25519 signatures differ every time.
+pub fn newest(records: impl IntoIterator<Item = Record>) -> Vec<Record> {
+    records
+        .into_iter()
+        .unique()
+        .max_set_by_key(|record| record.creation_time)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use libp2p::{Multiaddr, identity::Keypair};
+    use libp2p::{Multiaddr, PeerId, identity::Keypair};
     use parity_scale_codec::Encode;
     use prost::Message as _;
 
-    use super::{Record, SIGNING_CONTEXT, schema};
+    use super::{Record, SIGNING_CONTEXT, newest, schema};
 
     fn keys() -> (schnorrkel::Keypair, [u8; 32], Keypair) {
         let authority = schnorrkel::Keypair::generate();
@@ -352,5 +363,57 @@ mod tests {
         let value = published(&authority, &peer, &[], None);
 
         assert!(rejection(&value, &authority_key).contains("no address that names a peer"));
+    }
+
+    fn created(secs: Option<u64>) -> Record {
+        Record {
+            peer_id: PeerId::random(),
+            addresses: Vec::new(),
+            creation_time: secs.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+        }
+    }
+
+    fn peers(records: &[Record]) -> Vec<PeerId> {
+        records.iter().map(|record| record.peer_id).collect()
+    }
+
+    #[test]
+    fn newest_record_is_kept() {
+        let records = [created(Some(1)), created(Some(3)), created(Some(2))];
+        let latest = records[1].peer_id;
+
+        assert_eq!(peers(&newest(records)), [latest]);
+    }
+
+    #[test]
+    fn record_without_time_loses_to_one_with_time() {
+        let records = [created(None), created(Some(1))];
+        let timed = records[1].peer_id;
+
+        assert_eq!(peers(&newest(records)), [timed]);
+    }
+
+    #[test]
+    fn records_without_times_all_stay() {
+        let records = [created(None), created(None)];
+        let all = peers(&records);
+
+        assert_eq!(peers(&newest(records)), all);
+    }
+
+    #[test]
+    fn same_record_stays_once() {
+        let record = created(None);
+        let peer = record.peer_id;
+
+        assert_eq!(peers(&newest([record.clone(), record])), [peer]);
+    }
+
+    #[test]
+    fn records_with_the_same_time_all_stay() {
+        let records = [created(Some(1)), created(Some(1))];
+        let all = peers(&records);
+
+        assert_eq!(peers(&newest(records)), all);
     }
 }
