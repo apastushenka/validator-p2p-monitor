@@ -23,3 +23,5 @@ sha2 = { version = "0.11.1" }
 subxt = { version = "0.51.1" }
 time = { version = "0.3.55", features = ["formatting"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync"] }
+tracing = { version = "0.1.44" }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

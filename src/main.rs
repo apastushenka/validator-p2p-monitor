@@ -5,9 +5,13 @@ mod network;
 mod record;
 mod report;
 
-use std::process::ExitCode;
+use std::{
+    io::{self, IsTerminal},
+    process::ExitCode,
+};
 
 use futures::{StreamExt, TryStreamExt, stream};
+use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{
     chain::{Chain, Validator},
@@ -21,13 +25,27 @@ const MAX_LOOKUPS: usize = 32;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    init_logging();
+
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("{}: {}", env!("CARGO_PKG_NAME"), message(&err));
+            tracing::error!("{}", message(&err));
             ExitCode::FAILURE
         }
     }
+}
+
+/// `RUST_LOG` sets the levels, and without it the level is `info`.
+fn init_logging() {
+    let filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(io::stdout().is_terminal())
+        .init();
 }
 
 async fn run() -> anyhow::Result<()> {
