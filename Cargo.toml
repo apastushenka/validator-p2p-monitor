@@ -13,7 +13,7 @@ futures = { version = "0.3.34" }
 hex = { version = "0.4.3" }
 ip_network = { version = "0.4.1" }
 itertools = { version = "0.14.0" }
-libp2p = { version = "0.57.1", features = ["dns", "ed25519", "kad", "macros", "noise", "tcp", "tokio", "websocket", "yamux"] }
+libp2p = { version = "0.57.1", features = ["dns", "ed25519", "identify", "kad", "macros", "noise", "tcp", "tokio", "websocket", "yamux"] }
 parity-scale-codec = { version = "3.7.5" }
 prost = { version = "0.14.6" }
 schnorrkel = { version = "0.11.5", default-features = false, features = ["getrandom"] }
