@@ -2,6 +2,7 @@ mod address;
 mod chain;
 mod cli;
 mod network;
+mod record;
 mod report;
 
 use std::process::ExitCode;

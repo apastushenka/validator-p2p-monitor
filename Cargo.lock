@@ -5214,11 +5214,16 @@ dependencies = [
  "futures",
  "hex",
  "ip_network",
+ "itertools 0.14.0",
  "libp2p",
+ "parity-scale-codec",
+ "prost",
+ "schnorrkel",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "subxt",
+ "time",
  "tokio",
 ]
 
