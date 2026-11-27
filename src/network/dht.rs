@@ -102,6 +102,7 @@ impl Network {
                  belong to another chain"
             );
         }
+        tracing::info!(peers_answered = stats.num_successes(), "joined the DHT");
 
         Ok(())
     }

@@ -24,6 +24,7 @@ impl Chain {
         let client = OnlineClient::from_url(rpc)
             .await
             .context("failed to connect to the RPC endpoint")?;
+        tracing::info!(genesis_hash = ?client.genesis_hash(), "connected to the chain");
 
         Ok(Self { client })
     }
@@ -41,8 +42,14 @@ impl Chain {
 
         let accounts = fetch(&at, session::validators()).await?;
         let keys = fetch(&at, authority_discovery::keys()).await?;
+        let validators = pair(accounts, keys)?;
+        tracing::info!(
+            block = at.block_number(),
+            validators = validators.len(),
+            "read the validators of the current session",
+        );
 
-        pair(accounts, keys)
+        Ok(validators)
     }
 }
 
