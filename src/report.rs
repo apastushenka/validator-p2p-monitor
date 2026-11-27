@@ -20,17 +20,17 @@ pub struct Report {
 struct ValidatorReport {
     account: String,
     authority_discovery_key: String,
-    record: RecordReport,
+    lookup: LookupReport,
+    /// The newest of the versions that passed verification. Several stay when they differ and
+    /// none has a creation time.
+    records: Vec<PublishedRecord>,
 }
 
 #[derive(Serialize)]
-struct RecordReport {
+struct LookupReport {
     outcome: Outcome,
     versions: usize,
     peers_answered: u32,
-    /// The newest of the versions that passed verification. Several stay only when none has a
-    /// creation time.
-    records: Vec<PublishedRecord>,
 }
 
 #[derive(Serialize)]
@@ -65,11 +65,13 @@ impl Report {
                     let verified = lookup.versions.iter().filter_map(|value| {
                         Record::decode(value, &validator.authority_discovery_key).ok()
                     });
+                    let records = record::newest(verified);
 
                     ValidatorReport {
                         account: to_hex(&validator.account),
                         authority_discovery_key: to_hex(&validator.authority_discovery_key),
-                        record: RecordReport::new(lookup, record::newest(verified)),
+                        lookup: LookupReport::new(lookup, &records),
+                        records: records.into_iter().map(PublishedRecord::from).collect(),
                     }
                 })
                 .collect(),
@@ -77,9 +79,9 @@ impl Report {
     }
 }
 
-impl RecordReport {
+impl LookupReport {
     /// `records` holds the newest of the lookup's versions that passed verification.
-    fn new(lookup: &RecordLookup, records: Vec<Record>) -> Self {
+    fn new(lookup: &RecordLookup, records: &[Record]) -> Self {
         let outcome = if !records.is_empty() {
             Outcome::Found
         } else if !lookup.versions.is_empty() {
@@ -94,7 +96,6 @@ impl RecordReport {
             outcome,
             versions: lookup.versions.len(),
             peers_answered: lookup.peers_answered,
-            records: records.into_iter().map(PublishedRecord::from).collect(),
         }
     }
 }
@@ -130,7 +131,7 @@ mod tests {
 
     use libp2p::PeerId;
 
-    use super::{Outcome, RecordReport, rfc3339};
+    use super::{LookupReport, Outcome, rfc3339};
     use crate::{network::RecordLookup, record::Record};
 
     fn outcome(versions: usize, verified: usize, timed_out: bool) -> Outcome {
@@ -139,7 +140,7 @@ mod tests {
             timed_out,
             peers_answered: 0,
         };
-        let records = (0..verified)
+        let records: Vec<_> = (0..verified)
             .map(|_| Record {
                 peer_id: PeerId::random(),
                 addresses: Vec::new(),
@@ -147,7 +148,7 @@ mod tests {
             })
             .collect();
 
-        RecordReport::new(&lookup, records).outcome
+        LookupReport::new(&lookup, &records).outcome
     }
 
     #[test]

@@ -168,8 +168,9 @@ fn single_peer_id(addresses: &[Multiaddr]) -> anyhow::Result<PeerId> {
 }
 
 /// The records with the latest creation time, each once. The node counts a record without a time
-/// as the oldest, so all records stay only when none has a time. The same record comes back in
-/// several versions, as each republishing signs it anew and sr25519 signatures differ every time.
+/// as the oldest, so several different records stay when none has a time. The same record comes
+/// back in several versions, as each republishing signs it anew and sr25519 signatures differ
+/// every time.
 pub fn newest(records: impl IntoIterator<Item = Record>) -> Vec<Record> {
     records
         .into_iter()
