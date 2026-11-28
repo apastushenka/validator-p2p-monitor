@@ -39,8 +39,8 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
             Some(validator) = schedule.next_check() => {
                 // A validator whose last check is still running lets its turn pass, so two checks
                 // of it never run at once.
-                if checking.insert(validator.account.clone()) {
-                    let account = validator.account.clone();
+                if checking.insert(validator.account) {
+                    let account = validator.account;
                     let network = network.clone();
                     checks.spawn(async move {
                         check::run(network, validator).await?;
@@ -48,7 +48,7 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
                     });
                 } else {
                     tracing::warn!(
-                        account = %check::to_hex(&validator.account),
+                        account = %validator.account,
                         "skipped a check: the last one is still running",
                     );
                 }

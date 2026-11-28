@@ -10,6 +10,8 @@ use subxt::{
     storage::{Address, DynamicAddress},
 };
 
+use crate::account::Account;
+
 /// How long the RPC endpoint may take to connect or to answer a read. The client retries a failed
 /// connection without end, the first one included, and a call made while it reconnects waits
 /// rather than fails, so without this limit the monitor would wait in silence.
@@ -18,8 +20,8 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// A validator of the current session with the key it publishes its addresses under.
 #[derive(Clone)]
 pub struct Validator {
-    /// The stash account: 20 or 32 bytes, depending on the chain.
-    pub account: Vec<u8>,
+    /// The stash account.
+    pub account: Account,
     /// An sr25519 public key.
     pub authority_discovery_key: [u8; 32],
 }
@@ -121,14 +123,17 @@ fn pair(accounts: Vec<Vec<u8>>, keys: Vec<[u8; 32]>) -> anyhow::Result<Vec<Valid
         keys.len(),
     );
 
-    Ok(accounts
+    accounts
         .into_iter()
         .zip(keys)
-        .map(|(account, authority_discovery_key)| Validator {
-            account,
-            authority_discovery_key,
+        .map(|(account, authority_discovery_key)| {
+            let account = Account::try_from(account.as_slice())?;
+            anyhow::Ok(Validator {
+                account,
+                authority_discovery_key,
+            })
         })
-        .collect())
+        .collect()
 }
 
 async fn fetch<V: DecodeAsType>(
@@ -170,6 +175,7 @@ mod authority_discovery {
 #[cfg(test)]
 mod tests {
     use super::pair;
+    use crate::account::Account;
 
     #[test]
     fn pair_matches_keys_to_accounts_by_position() {
@@ -179,7 +185,13 @@ mod tests {
             .into_iter()
             .map(|validator| (validator.account, validator.authority_discovery_key))
             .collect();
-        assert_eq!(pairs, [(vec![1; 20], [3; 32]), (vec![2; 20], [4; 32])]);
+        assert_eq!(
+            pairs,
+            [
+                (Account::Id20([1; 20]), [3; 32]),
+                (Account::Id20([2; 20]), [4; 32]),
+            ],
+        );
     }
 
     #[test]
