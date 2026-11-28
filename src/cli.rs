@@ -16,13 +16,13 @@ pub struct Cli {
     #[arg(long, value_name = "ADDR", num_args = 1.., required = true)]
     pub bootnodes: Vec<Bootnode>,
 
-    /// How often each validator is checked, in seconds. After the start, the first check of every
-    /// validator begins within one interval.
+    /// How often each validator is checked, in seconds, from 120 to 3600 (an hour). After the
+    /// start, the first check of every validator begins within one interval.
     #[arg(
         long,
         value_name = "SECONDS",
         default_value_t = 600,
-        value_parser = clap::value_parser!(u64).range(1..),
+        value_parser = clap::value_parser!(u64).range(120..=3600),
     )]
     pub check_interval_seconds: u64,
 }
