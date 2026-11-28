@@ -1,5 +1,5 @@
-//! The monitor as a service, which checks the validators one at a time in turn rather than in
-//! passes over the whole set.
+//! The monitor as a service, which takes the validators in turn rather than in passes over the
+//! whole set.
 
 mod schedule;
 
@@ -27,13 +27,13 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
 
     let mut schedule = Schedule::new(validators, interval);
     let mut checks = JoinSet::new();
-    // The accounts whose checks run.
+    // The accounts whose checks are running.
     let mut checking = HashSet::new();
     loop {
         tokio::select! {
             Some(validator) = schedule.next_check() => {
-                // A validator whose last check still runs lets its turn pass, so two checks of it
-                // never run at once.
+                // A validator whose last check is still running lets its turn pass, so two checks
+                // of it never run at once.
                 if checking.insert(validator.account.clone()) {
                     let account = validator.account.clone();
                     let network = network.clone();
