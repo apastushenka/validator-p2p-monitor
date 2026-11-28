@@ -41,6 +41,11 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
                         check::run(network, validator).await?;
                         anyhow::Ok(account)
                     });
+                } else {
+                    tracing::warn!(
+                        account = %check::to_hex(&validator.account),
+                        "skipped a check: the last one is still running",
+                    );
                 }
             }
             Some(finished) = checks.join_next() => {

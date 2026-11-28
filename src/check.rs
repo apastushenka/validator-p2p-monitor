@@ -73,7 +73,7 @@ pub async fn run(network: Network, validator: Validator) -> anyhow::Result<Outco
     Ok(outcome)
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub fn to_hex(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
