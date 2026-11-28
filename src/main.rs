@@ -47,9 +47,8 @@ async fn run() -> anyhow::Result<()> {
     let network = Network::new(chain.genesis_hash(), &cli.bootnodes).await?;
     network.join().await?;
 
-    let validators = chain.current_validators().await?;
     let interval = Duration::from_secs(cli.check_interval_seconds);
-    service::run(network, validators, interval).await
+    service::run(chain, network, interval).await
 }
 
 /// The error chain without the causes the message already contains: a subxt error
