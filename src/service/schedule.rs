@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::time::{self, Instant};
+use tokio::time::{self, Interval, MissedTickBehavior};
 
 use crate::chain::Validator;
 
@@ -14,30 +14,34 @@ pub struct Schedule {
     interval: Duration,
     /// The validator whose turn is next comes first.
     validators: VecDeque<Validator>,
-    /// When the first validator takes its turn.
-    next_turn: Instant,
+    /// One tick a turn. Its period is the step, so a set of another size needs new ticks.
+    ticks: Interval,
 }
 
 impl Schedule {
     /// The first turn comes at once.
     pub fn new(validators: Vec<Validator>, interval: Duration) -> Self {
+        let ticks = ticks(interval, validators.len());
+
         Self {
             interval,
             validators: validators.into(),
-            next_turn: Instant::now(),
+            ticks,
         }
     }
 
     /// Waits for the next turn, and returns its validator. Ends with `None` rather than waiting
-    /// when the set is empty. Cancel-safe, as `select!` needs: the schedule moves on only once the
-    /// wait has ended.
+    /// when the set is empty. Cancel-safe, as `select!` needs, since `Interval::tick` is.
     pub async fn next_check(&mut self) -> Option<Validator> {
         if self.validators.is_empty() {
             return None;
         }
-        time::sleep_until(self.next_turn).await;
+        self.ticks.tick().await;
 
-        Some(self.take_turn())
+        let validator = self.validators.front().cloned();
+        self.validators.rotate_left(1);
+
+        validator
     }
 
     /// A validator new to the set takes one of the next turns, and one that left the set is no
@@ -67,23 +71,22 @@ impl Schedule {
             self.validators.push_front(validator);
         }
 
+        // The new ticks start at once, so a newcomer is checked right away.
+        if self.validators.len() != before {
+            self.ticks = ticks(self.interval, self.validators.len());
+        }
+
         (added, removed)
     }
+}
 
-    /// The validator whose turn it is, which goes to the back. A turn taken late moves the later
-    /// ones back rather than bunching them up.
-    fn take_turn(&mut self) -> Validator {
-        let step = self.interval.div_f64(self.validators.len() as f64);
-        self.next_turn = self.next_turn.max(Instant::now()) + step;
+/// An empty set takes no turns, but its ticks still need a period.
+fn ticks(interval: Duration, validators: usize) -> Interval {
+    let mut ticks = time::interval(interval.div_f64(validators.max(1) as f64));
+    // A turn taken late moves the later ones back rather than bunching them up.
+    ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-        let validator = self
-            .validators
-            .pop_front()
-            .expect("a turn is taken only with validators");
-        self.validators.push_back(validator.clone());
-
-        validator
-    }
+    ticks
 }
 
 #[cfg(test)]
@@ -163,10 +166,49 @@ mod tests {
 
         assert_eq!(schedule.update(validators(3)), (1, 0));
         assert_eq!(next_account(&mut schedule).await, 2);
-        assert_eq!(start.elapsed(), Duration::from_secs(150));
+        assert_eq!(start.elapsed(), Duration::ZERO);
         assert_eq!(next_account(&mut schedule).await, 1);
-        assert_eq!(start.elapsed(), Duration::from_secs(250));
+        assert_eq!(start.elapsed(), Duration::from_secs(100));
         assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(start.elapsed(), Duration::from_secs(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn set_grown_from_one_takes_the_new_step_at_once() {
+        let start = Instant::now();
+        let mut schedule = Schedule::new(validators(1), TEN_MINUTES);
+        assert_eq!(next_account(&mut schedule).await, 0);
+
+        assert_eq!(schedule.update(validators(10)), (9, 0));
+        schedule.next_check().await.unwrap();
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        schedule.next_check().await.unwrap();
+        assert_eq!(start.elapsed(), Duration::from_secs(60));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timer_rounding_does_not_stretch_the_round() {
+        let start = Instant::now();
+        let mut schedule = Schedule::new(validators(3), Duration::from_secs(1));
+
+        for _ in 0..4 {
+            schedule.next_check().await.unwrap();
+        }
+        assert!(start.elapsed() < Duration::from_millis(1001));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn set_of_the_same_size_keeps_the_pace() {
+        let start = Instant::now();
+        let mut schedule = Schedule::new(validators(2), Duration::from_secs(200));
+        assert_eq!(next_account(&mut schedule).await, 0);
+        tokio::time::advance(Duration::from_secs(50)).await;
+
+        assert_eq!(schedule.update(vec![validator(0), validator(2)]), (1, 1));
+        assert_eq!(next_account(&mut schedule).await, 2);
+        assert_eq!(start.elapsed(), Duration::from_secs(100));
+        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(start.elapsed(), Duration::from_secs(200));
     }
 
     #[tokio::test(start_paused = true)]
