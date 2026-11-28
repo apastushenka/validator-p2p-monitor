@@ -10,6 +10,8 @@ use subxt::{
     storage::{Address, DynamicAddress},
 };
 
+use crate::account::Account;
+
 /// How long the RPC endpoint may take to connect or to answer a read. The client retries a failed
 /// connection without end, the first one included, and a call made while it reconnects waits
 /// rather than fails, so without this limit the monitor would wait in silence.
@@ -18,8 +20,8 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 /// A validator of the current session with the key it publishes its addresses under.
 #[derive(Clone)]
 pub struct Validator {
-    /// The stash account: 20 or 32 bytes, depending on the chain.
-    pub account: Vec<u8>,
+    /// The stash account.
+    pub account: Account,
     /// An sr25519 public key.
     pub authority_discovery_key: [u8; 32],
 }
@@ -32,6 +34,7 @@ pub struct ValidatorSet {
 
 pub struct Chain {
     client: OnlineClient<SubstrateConfig>,
+    ss58_prefix: u16,
 }
 
 impl Chain {
@@ -40,52 +43,31 @@ impl Chain {
         let client = with_deadline(open_client(rpc))
             .await
             .context("failed to connect to the RPC endpoint")?;
-        tracing::info!(genesis_hash = ?client.genesis_hash(), "connected to the chain");
+        let ss58_prefix = with_deadline(read_ss58_prefix(&client)).await?;
+        tracing::info!(
+            genesis_hash = ?client.genesis_hash(),
+            ss58_prefix,
+            "connected to the chain",
+        );
 
-        Ok(Self { client })
+        Ok(Self { client, ss58_prefix })
     }
 
     pub fn genesis_hash(&self) -> [u8; 32] {
         self.client.genesis_hash().0
     }
 
+    /// The chain's `System::SS58Prefix`.
+    pub fn ss58_prefix(&self) -> u16 {
+        self.ss58_prefix
+    }
+
     pub async fn current_session(&self) -> anyhow::Result<u32> {
-        with_deadline(self.read_session()).await
+        with_deadline(read_session(&self.client)).await
     }
 
     pub async fn current_validators(&self) -> anyhow::Result<ValidatorSet> {
-        with_deadline(self.read_validators()).await
-    }
-
-    async fn read_session(&self) -> anyhow::Result<u32> {
-        let at = self.at_current_block().await?;
-
-        fetch(&at, session::current_index()).await
-    }
-
-    async fn read_validators(&self) -> anyhow::Result<ValidatorSet> {
-        let at = self.at_current_block().await?;
-
-        let session = fetch(&at, session::current_index()).await?;
-        let accounts = fetch(&at, session::validators()).await?;
-        let keys = fetch(&at, authority_discovery::keys()).await?;
-
-        let validators = pair(accounts, keys)?;
-        tracing::info!(
-            block = at.block_number(),
-            session,
-            validators = validators.len(),
-            "read the validators of the current session",
-        );
-
-        Ok(ValidatorSet { session, validators })
-    }
-
-    async fn at_current_block(&self) -> anyhow::Result<OnlineClientAtBlock<SubstrateConfig>> {
-        self.client
-            .at_current_block()
-            .await
-            .context("failed to get the latest finalized block")
+        with_deadline(read_validators(&self.client)).await
     }
 }
 
@@ -109,6 +91,38 @@ async fn open_client(rpc: &str) -> anyhow::Result<OnlineClient<SubstrateConfig>>
     Ok(client)
 }
 
+async fn read_ss58_prefix(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<u16> {
+    let at = at_current_block(client).await?;
+
+    at.constants()
+        .entry(system::ss58_prefix())
+        .context("failed to read System::SS58Prefix")
+}
+
+async fn read_session(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<u32> {
+    let at = at_current_block(client).await?;
+
+    fetch(&at, session::current_index()).await
+}
+
+async fn read_validators(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<ValidatorSet> {
+    let at = at_current_block(client).await?;
+
+    let session = fetch(&at, session::current_index()).await?;
+    let accounts = fetch(&at, session::validators()).await?;
+    let keys = fetch(&at, authority_discovery::keys()).await?;
+
+    let validators = pair(accounts, keys)?;
+    tracing::info!(
+        block = at.block_number(),
+        session,
+        validators = validators.len(),
+        "read the validators of the current session",
+    );
+
+    Ok(ValidatorSet { session, validators })
+}
+
 /// Match the accounts from `Session::Validators` with the keys from `AuthorityDiscovery::Keys`.
 ///
 /// Neither entry names the other, but they come in the same order: when a session starts,
@@ -121,14 +135,26 @@ fn pair(accounts: Vec<Vec<u8>>, keys: Vec<[u8; 32]>) -> anyhow::Result<Vec<Valid
         keys.len(),
     );
 
-    Ok(accounts
+    accounts
         .into_iter()
         .zip(keys)
-        .map(|(account, authority_discovery_key)| Validator {
-            account,
-            authority_discovery_key,
+        .map(|(account, authority_discovery_key)| {
+            let account = Account::try_from(account.as_slice())?;
+            anyhow::Ok(Validator {
+                account,
+                authority_discovery_key,
+            })
         })
-        .collect())
+        .collect()
+}
+
+async fn at_current_block(
+    client: &OnlineClient<SubstrateConfig>,
+) -> anyhow::Result<OnlineClientAtBlock<SubstrateConfig>> {
+    client
+        .at_current_block()
+        .await
+        .context("failed to get the latest finalized block")
 }
 
 async fn fetch<V: DecodeAsType>(
@@ -147,6 +173,14 @@ async fn fetch<V: DecodeAsType>(
 
 // Laid out like subxt's generated API, but dynamic: generated types belong to one runtime,
 // and the monitor reads any relay chain.
+mod system {
+    use subxt::{constants::DynamicAddress, dynamic};
+
+    pub fn ss58_prefix() -> DynamicAddress<u16> {
+        dynamic::constant("System", "SS58Prefix")
+    }
+}
+
 mod session {
     use subxt::{dynamic, storage::DynamicAddress};
 
@@ -170,6 +204,7 @@ mod authority_discovery {
 #[cfg(test)]
 mod tests {
     use super::pair;
+    use crate::account::Account;
 
     #[test]
     fn pair_matches_keys_to_accounts_by_position() {
@@ -179,7 +214,13 @@ mod tests {
             .into_iter()
             .map(|validator| (validator.account, validator.authority_discovery_key))
             .collect();
-        assert_eq!(pairs, [(vec![1; 20], [3; 32]), (vec![2; 20], [4; 32])]);
+        assert_eq!(
+            pairs,
+            [
+                (Account::Id20([1; 20]), [3; 32]),
+                (Account::Id20([2; 20]), [4; 32]),
+            ],
+        );
     }
 
     #[test]

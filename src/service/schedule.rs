@@ -50,7 +50,7 @@ impl Schedule {
     pub fn update(&mut self, validators: Vec<Validator>) -> (usize, usize) {
         let mut new_set: HashMap<_, _> = validators
             .into_iter()
-            .map(|validator| (validator.account.clone(), validator))
+            .map(|validator| (validator.account, validator))
             .collect();
 
         let before = self.validators.len();
@@ -96,13 +96,17 @@ mod tests {
     use tokio::time::Instant;
 
     use super::Schedule;
-    use crate::chain::Validator;
+    use crate::{account::Account, chain::Validator};
 
     const TEN_MINUTES: Duration = Duration::from_secs(600);
 
+    fn account(index: u8) -> Account {
+        Account::Id32([index; 32])
+    }
+
     fn validator(index: u8) -> Validator {
         Validator {
-            account: vec![index],
+            account: account(index),
             authority_discovery_key: [index; 32],
         }
     }
@@ -111,8 +115,8 @@ mod tests {
         (0..count).map(validator).collect()
     }
 
-    async fn next_account(schedule: &mut Schedule) -> u8 {
-        schedule.next_check().await.unwrap().account[0]
+    async fn next_account(schedule: &mut Schedule) -> Account {
+        schedule.next_check().await.unwrap().account
     }
 
     #[tokio::test(start_paused = true)]
@@ -120,9 +124,9 @@ mod tests {
         let start = Instant::now();
         let mut schedule = Schedule::new(validators(4), Duration::from_secs(400));
 
-        for (account, after) in [(0, 0), (1, 100), (2, 200), (3, 300)] {
+        for (index, after) in [(0, 0), (1, 100), (2, 200), (3, 300)] {
             let validator = schedule.next_check().await.unwrap();
-            assert_eq!(validator.account, [account]);
+            assert_eq!(validator.account, account(index));
             assert_eq!(start.elapsed(), Duration::from_secs(after));
         }
     }
@@ -147,7 +151,7 @@ mod tests {
         schedule.next_check().await.unwrap();
         assert_eq!(start.elapsed(), Duration::from_secs(250));
         let validator = schedule.next_check().await.unwrap();
-        assert_eq!(validator.account, [0]);
+        assert_eq!(validator.account, account(0));
         assert_eq!(start.elapsed(), Duration::from_secs(350));
     }
 
@@ -162,14 +166,14 @@ mod tests {
     async fn newcomer_is_checked_next_and_the_step_follows_the_set() {
         let start = Instant::now();
         let mut schedule = Schedule::new(validators(2), Duration::from_secs(300));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
 
         assert_eq!(schedule.update(validators(3)), (1, 0));
-        assert_eq!(next_account(&mut schedule).await, 2);
+        assert_eq!(next_account(&mut schedule).await, account(2));
         assert_eq!(start.elapsed(), Duration::ZERO);
-        assert_eq!(next_account(&mut schedule).await, 1);
+        assert_eq!(next_account(&mut schedule).await, account(1));
         assert_eq!(start.elapsed(), Duration::from_secs(100));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
         assert_eq!(start.elapsed(), Duration::from_secs(200));
     }
 
@@ -177,7 +181,7 @@ mod tests {
     async fn set_grown_from_one_takes_the_new_step_at_once() {
         let start = Instant::now();
         let mut schedule = Schedule::new(validators(1), TEN_MINUTES);
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
 
         assert_eq!(schedule.update(validators(10)), (9, 0));
         schedule.next_check().await.unwrap();
@@ -201,20 +205,20 @@ mod tests {
     async fn set_of_the_same_size_keeps_the_pace() {
         let start = Instant::now();
         let mut schedule = Schedule::new(validators(2), Duration::from_secs(200));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
         tokio::time::advance(Duration::from_secs(50)).await;
 
         assert_eq!(schedule.update(vec![validator(0), validator(2)]), (1, 1));
-        assert_eq!(next_account(&mut schedule).await, 2);
+        assert_eq!(next_account(&mut schedule).await, account(2));
         assert_eq!(start.elapsed(), Duration::from_secs(100));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
         assert_eq!(start.elapsed(), Duration::from_secs(200));
     }
 
     #[tokio::test(start_paused = true)]
     async fn departed_validator_is_no_longer_checked() {
         let mut schedule = Schedule::new(validators(3), Duration::from_secs(300));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
 
         assert_eq!(schedule.update(vec![validator(0), validator(2)]), (0, 1));
         let turns = [
@@ -222,7 +226,7 @@ mod tests {
             next_account(&mut schedule).await,
             next_account(&mut schedule).await,
         ];
-        assert_eq!(turns, [2, 0, 2]);
+        assert_eq!(turns, [account(2), account(0), account(2)]);
     }
 
     #[tokio::test(start_paused = true)]
@@ -233,7 +237,7 @@ mod tests {
         tokio::time::advance(TEN_MINUTES).await;
 
         schedule.update(validators(1));
-        assert_eq!(next_account(&mut schedule).await, 0);
+        assert_eq!(next_account(&mut schedule).await, account(0));
         assert_eq!(start.elapsed(), TEN_MINUTES);
     }
 
@@ -241,7 +245,7 @@ mod tests {
     async fn changed_key_is_used_from_the_next_check() {
         let mut schedule = Schedule::new(validators(1), TEN_MINUTES);
         let rotated = Validator {
-            account: vec![0],
+            account: account(0),
             authority_discovery_key: [9; 32],
         };
 

@@ -47,11 +47,6 @@ impl fmt::Display for Outcome {
     }
 }
 
-#[tracing::instrument(
-    name = "validator",
-    skip_all,
-    fields(account = %to_hex(&validator.account)),
-)]
 pub async fn run(network: Network, validator: Validator) -> anyhow::Result<Outcome> {
     let lookup = network
         .find_record(validator.authority_discovery_key)
@@ -71,10 +66,6 @@ pub async fn run(network: Network, validator: Validator) -> anyhow::Result<Outco
     );
 
     Ok(outcome)
-}
-
-pub fn to_hex(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
 }
 
 #[cfg(test)]
