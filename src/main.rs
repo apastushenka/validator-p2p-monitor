@@ -1,27 +1,20 @@
 mod address;
 mod chain;
+mod check;
 mod cli;
 mod network;
 mod record;
-mod report;
+mod service;
 
 use std::{
     io::{self, IsTerminal},
     process::ExitCode,
+    time::Duration,
 };
 
-use futures::{StreamExt, TryStreamExt, stream};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
-use crate::{
-    chain::{Chain, Validator},
-    network::{Network, RecordLookup},
-    report::Report,
-};
-
-/// Record lookups that run at once. Without a limit, hundreds of lookups start from the same
-/// few peers at once, and most of them end without the record.
-const MAX_LOOKUPS: usize = 32;
+use crate::{chain::Chain, network::Network};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -53,32 +46,9 @@ async fn run() -> anyhow::Result<()> {
     let chain = Chain::connect(&cli.rpc).await?;
     let network = Network::new(chain.genesis_hash(), &cli.bootnodes).await?;
     network.join().await?;
-    let validators = chain.current_validators().await?;
-    let lookups = find_records(&network, &validators).await?;
-    let report = Report::new(&validators, &lookups);
-    println!("{}", serde_json::to_string_pretty(&report)?);
 
-    Ok(())
-}
-
-/// Look up the record of each validator, and return the lookups in the validators' order.
-async fn find_records(
-    network: &Network,
-    validators: &[Validator],
-) -> anyhow::Result<Vec<RecordLookup>> {
-    let mut lookups: Vec<_> = stream::iter(validators.iter().enumerate())
-        .map(|(index, validator)| async move {
-            let lookup = network
-                .find_record(validator.authority_discovery_key)
-                .await?;
-            anyhow::Ok((index, lookup))
-        })
-        .buffer_unordered(MAX_LOOKUPS)
-        .try_collect()
-        .await?;
-    lookups.sort_by_key(|(index, _)| *index);
-
-    Ok(lookups.into_iter().map(|(_, lookup)| lookup).collect())
+    let interval = Duration::from_secs(cli.check_interval_seconds);
+    service::run(chain, network, interval).await
 }
 
 /// The error chain without the causes the message already contains: a subxt error
