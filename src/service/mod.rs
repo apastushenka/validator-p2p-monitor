@@ -3,7 +3,7 @@
 
 mod schedule;
 
-use std::{collections::HashSet, pin::pin, time::Duration};
+use std::{cmp, collections::HashSet, pin::pin, time::Duration};
 
 use futures::{Stream, StreamExt, stream};
 use tokio::{
@@ -18,12 +18,17 @@ use crate::{
     network::Network,
 };
 
+/// The longest the session goes unread. Half the check interval keeps a change of the set from
+/// going unnoticed for a whole interval; this cap keeps the set fresh with a long interval too.
+const MAX_SESSION_POLL: Duration = Duration::from_secs(10 * 60);
+
 /// The first check that fails stops the service.
 pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::Result<()> {
     let ValidatorSet { session, validators } = chain.current_validators().await?;
+    let session_poll = cmp::min(interval / 2, MAX_SESSION_POLL);
     // Polled alongside the checks, so that trouble with the RPC holds up only the next update of
     // the set, not the checks.
-    let mut validator_set_updates = pin!(watch_validator_set(&chain, session, interval / 2));
+    let mut validator_set_updates = pin!(watch_validator_set(&chain, session, session_poll));
 
     let mut schedule = Schedule::new(validators, interval);
     let mut checks = JoinSet::new();
