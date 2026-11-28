@@ -5058,6 +5058,8 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.15.5",
  "libc",
  "pin-project-lite",
  "tokio",
@@ -5328,6 +5330,7 @@ dependencies = [
  "sha2 0.11.1",
  "subxt",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

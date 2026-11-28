@@ -3,19 +3,16 @@
 
 mod schedule;
 
-use std::{cmp, collections::HashSet, pin::pin, time::Duration};
+use std::{cmp, pin::pin, time::Duration};
 
 use futures::{Stream, StreamExt, stream};
-use tokio::{
-    task::JoinSet,
-    time::{self, Instant, Interval, MissedTickBehavior},
-};
+use tokio::time::{self, Instant, Interval, MissedTickBehavior};
+use tokio_util::task::JoinMap;
 
 use self::schedule::Schedule;
 use crate::{
-    account::Account,
     chain::{Chain, Validator, ValidatorSet},
-    check,
+    check::{self, Outcome},
     network::Network,
 };
 
@@ -32,26 +29,26 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
     let mut validator_set_updates = pin!(watch_validator_set(&chain, session, session_poll));
 
     let mut schedule = Schedule::new(validators, interval);
-    let mut checks = JoinSet::new();
-    // The accounts whose checks are running.
-    let mut checking = HashSet::new();
+    let mut checks = JoinMap::new();
     loop {
         tokio::select! {
             Some(validator) = schedule.next_check() => {
                 // A validator whose last check is still running lets its turn pass, so two checks
                 // of it never run at once.
-                if checking.insert(validator.account) {
-                    checks.spawn(check_task(network.clone(), validator, chain.ss58_prefix()));
-                } else {
+                if checks.contains_key(&validator.account) {
                     tracing::warn!(
                         account = %validator.account.display(chain.ss58_prefix()),
                         "skipped a check: the last one is still running",
                     );
+                } else {
+                    checks.spawn(
+                        validator.account,
+                        check_task(network.clone(), validator, chain.ss58_prefix()),
+                    );
                 }
             }
-            Some(finished) = checks.join_next() => {
-                let account = finished??;
-                checking.remove(&account);
+            Some((_, finished)) = checks.join_next() => {
+                finished??;
             }
             Some(set) = validator_set_updates.next() => {
                 let (added, removed) = schedule.update(set.validators);
@@ -61,7 +58,6 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
     }
 }
 
-/// Ends with the account, so that the service learns whose check has finished.
 #[tracing::instrument(
     name = "validator",
     skip_all,
@@ -71,11 +67,8 @@ async fn check_task(
     network: Network,
     validator: Validator,
     ss58_prefix: u16,
-) -> anyhow::Result<Account> {
-    let account = validator.account;
-    check::run(network, validator).await?;
-
-    Ok(account)
+) -> anyhow::Result<Outcome> {
+    check::run(network, validator).await
 }
 
 /// The validators of each session after `session`, from a read of the session index every

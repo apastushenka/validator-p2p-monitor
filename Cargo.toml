@@ -22,6 +22,7 @@ schnorrkel = { version = "0.11.5", default-features = false, features = ["getran
 sha2 = { version = "0.11.1" }
 subxt = { version = "0.51.1", features = ["reconnecting-rpc-client"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = { version = "0.7.20", features = ["join-map"] }
 tracing = { version = "0.1.44" }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
