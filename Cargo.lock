@@ -5314,6 +5314,8 @@ name = "validator-p2p-monitor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake2",
+ "bs58",
  "clap",
  "futures",
  "hex",

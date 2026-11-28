@@ -34,6 +34,7 @@ pub struct ValidatorSet {
 
 pub struct Chain {
     client: OnlineClient<SubstrateConfig>,
+    ss58_prefix: u16,
 }
 
 impl Chain {
@@ -42,52 +43,31 @@ impl Chain {
         let client = with_deadline(open_client(rpc))
             .await
             .context("failed to connect to the RPC endpoint")?;
-        tracing::info!(genesis_hash = ?client.genesis_hash(), "connected to the chain");
+        let ss58_prefix = with_deadline(read_ss58_prefix(&client)).await?;
+        tracing::info!(
+            genesis_hash = ?client.genesis_hash(),
+            ss58_prefix,
+            "connected to the chain",
+        );
 
-        Ok(Self { client })
+        Ok(Self { client, ss58_prefix })
     }
 
     pub fn genesis_hash(&self) -> [u8; 32] {
         self.client.genesis_hash().0
     }
 
+    /// The chain's `System::SS58Prefix`.
+    pub fn ss58_prefix(&self) -> u16 {
+        self.ss58_prefix
+    }
+
     pub async fn current_session(&self) -> anyhow::Result<u32> {
-        with_deadline(self.read_session()).await
+        with_deadline(read_session(&self.client)).await
     }
 
     pub async fn current_validators(&self) -> anyhow::Result<ValidatorSet> {
-        with_deadline(self.read_validators()).await
-    }
-
-    async fn read_session(&self) -> anyhow::Result<u32> {
-        let at = self.at_current_block().await?;
-
-        fetch(&at, session::current_index()).await
-    }
-
-    async fn read_validators(&self) -> anyhow::Result<ValidatorSet> {
-        let at = self.at_current_block().await?;
-
-        let session = fetch(&at, session::current_index()).await?;
-        let accounts = fetch(&at, session::validators()).await?;
-        let keys = fetch(&at, authority_discovery::keys()).await?;
-
-        let validators = pair(accounts, keys)?;
-        tracing::info!(
-            block = at.block_number(),
-            session,
-            validators = validators.len(),
-            "read the validators of the current session",
-        );
-
-        Ok(ValidatorSet { session, validators })
-    }
-
-    async fn at_current_block(&self) -> anyhow::Result<OnlineClientAtBlock<SubstrateConfig>> {
-        self.client
-            .at_current_block()
-            .await
-            .context("failed to get the latest finalized block")
+        with_deadline(read_validators(&self.client)).await
     }
 }
 
@@ -109,6 +89,38 @@ async fn open_client(rpc: &str) -> anyhow::Result<OnlineClient<SubstrateConfig>>
     let client = OnlineClient::from_rpc_client(RpcClient::new(rpc_client)).await?;
 
     Ok(client)
+}
+
+async fn read_ss58_prefix(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<u16> {
+    let at = at_current_block(client).await?;
+
+    at.constants()
+        .entry(system::ss58_prefix())
+        .context("failed to read System::SS58Prefix")
+}
+
+async fn read_session(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<u32> {
+    let at = at_current_block(client).await?;
+
+    fetch(&at, session::current_index()).await
+}
+
+async fn read_validators(client: &OnlineClient<SubstrateConfig>) -> anyhow::Result<ValidatorSet> {
+    let at = at_current_block(client).await?;
+
+    let session = fetch(&at, session::current_index()).await?;
+    let accounts = fetch(&at, session::validators()).await?;
+    let keys = fetch(&at, authority_discovery::keys()).await?;
+
+    let validators = pair(accounts, keys)?;
+    tracing::info!(
+        block = at.block_number(),
+        session,
+        validators = validators.len(),
+        "read the validators of the current session",
+    );
+
+    Ok(ValidatorSet { session, validators })
 }
 
 /// Match the accounts from `Session::Validators` with the keys from `AuthorityDiscovery::Keys`.
@@ -136,6 +148,15 @@ fn pair(accounts: Vec<Vec<u8>>, keys: Vec<[u8; 32]>) -> anyhow::Result<Vec<Valid
         .collect()
 }
 
+async fn at_current_block(
+    client: &OnlineClient<SubstrateConfig>,
+) -> anyhow::Result<OnlineClientAtBlock<SubstrateConfig>> {
+    client
+        .at_current_block()
+        .await
+        .context("failed to get the latest finalized block")
+}
+
 async fn fetch<V: DecodeAsType>(
     at: &OnlineClientAtBlock<SubstrateConfig>,
     address: DynamicAddress<(), V>,
@@ -152,6 +173,14 @@ async fn fetch<V: DecodeAsType>(
 
 // Laid out like subxt's generated API, but dynamic: generated types belong to one runtime,
 // and the monitor reads any relay chain.
+mod system {
+    use subxt::{constants::DynamicAddress, dynamic};
+
+    pub fn ss58_prefix() -> DynamicAddress<u16> {
+        dynamic::constant("System", "SS58Prefix")
+    }
+}
+
 mod session {
     use subxt::{dynamic, storage::DynamicAddress};
 

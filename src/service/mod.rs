@@ -13,7 +13,8 @@ use tokio::{
 
 use self::schedule::Schedule;
 use crate::{
-    chain::{Chain, ValidatorSet},
+    account::Account,
+    chain::{Chain, Validator, ValidatorSet},
     check,
     network::Network,
 };
@@ -40,15 +41,10 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
                 // A validator whose last check is still running lets its turn pass, so two checks
                 // of it never run at once.
                 if checking.insert(validator.account) {
-                    let account = validator.account;
-                    let network = network.clone();
-                    checks.spawn(async move {
-                        check::run(network, validator).await?;
-                        anyhow::Ok(account)
-                    });
+                    checks.spawn(check_task(network.clone(), validator, chain.ss58_prefix()));
                 } else {
                     tracing::warn!(
-                        account = %validator.account,
+                        account = %validator.account.display(chain.ss58_prefix()),
                         "skipped a check: the last one is still running",
                     );
                 }
@@ -63,6 +59,23 @@ pub async fn run(chain: Chain, network: Network, interval: Duration) -> anyhow::
             }
         }
     }
+}
+
+/// Ends with the account, so that the service learns whose check has finished.
+#[tracing::instrument(
+    name = "validator",
+    skip_all,
+    fields(account = %validator.account.display(ss58_prefix)),
+)]
+async fn check_task(
+    network: Network,
+    validator: Validator,
+    ss58_prefix: u16,
+) -> anyhow::Result<Account> {
+    let account = validator.account;
+    check::run(network, validator).await?;
+
+    Ok(account)
 }
 
 /// The validators of each session after `session`, from a read of the session index every

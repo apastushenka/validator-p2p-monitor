@@ -47,11 +47,6 @@ impl fmt::Display for Outcome {
     }
 }
 
-#[tracing::instrument(
-    name = "validator",
-    skip_all,
-    fields(account = %validator.account),
-)]
 pub async fn run(network: Network, validator: Validator) -> anyhow::Result<Outcome> {
     let lookup = network
         .find_record(validator.authority_discovery_key)
